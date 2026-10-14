@@ -1,0 +1,27 @@
+{
+  "scripts": {
+    "db:up": "docker compose up -d postgres",
+    "migration:up": "bunx --bun mikro-orm migration:up",
+    "migration:down": "bunx --bun mikro-orm migration:down",
+    "migration:pending": "bunx --bun mikro-orm migration:pending",
+    "migration:list": "bunx --bun mikro-orm migration:list"
+  },
+  "mikro-orm": {
+    "configPaths": [
+      "./mikro-orm.config.ts"
+    ]
+  },
+  "dependencies": {
+    "@mikro-orm/core": "6",
+    "@mikro-orm/migrations": "6",
+    "@mikro-orm/postgresql": "6"
+  },
+  "devDependencies": {
+    "@mikro-orm/cli": "6",
+    "@types/pg": "^8.23.1",
+    "bun-types": "^1.4.3",
+    "pg": "^8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "typescript": "^7.0.2"
+  }
+}
