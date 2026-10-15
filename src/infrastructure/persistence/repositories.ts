@@ -1,23 +1,35 @@
-import { EntityManager, LockMode } from '@mikro-orm/core';
-import { Money } from '../../domain/money/money';
-import { Wallet } from '../../domain/wallet/wallet';
-import { WagerTransaction } from '../../domain/wager/wager-transaction';
-import { WalletLedgerEntry } from '../../domain/ledger/wallet-ledger-entry';
-import { OutboxMessage } from '../../domain/messaging/outbox-message';
+import { EntityManager, LockMode } from "@mikro-orm/core";
+import { Money } from "../../domain/money/money";
+import { Wallet } from "../../domain/wallet/wallet";
+import { WagerTransaction } from "../../domain/wager/wager-transaction";
+import { WalletLedgerEntry } from "../../domain/ledger/wallet-ledger-entry";
+import { OutboxMessage } from "../../domain/messaging/outbox-message";
 import {
-  InboxRepository, LedgerRepository, OutboxRepository, StoredWager, WagerRepository, WalletRepository,
-} from '../../application/ports';
+  InboxRepository,
+  LedgerRepository,
+  OutboxRepository,
+  StoredWager,
+  WagerRepository,
+  WalletRepository,
+} from "../../application/ports";
 import {
-  LedgerEntryEntity, OutboxMessageEntity, WagerTransactionEntity, WalletEntity,
-} from './entities';
-import { applyWallet, walletToDomain, wagerToDomain } from './mappers';
+  LedgerEntryEntity,
+  OutboxMessageEntity,
+  WagerTransactionEntity,
+  WalletEntity,
+} from "./entities";
+import { applyWallet, walletToDomain, wagerToDomain } from "./mappers";
 
 export class MikroWalletRepository implements WalletRepository {
   constructor(private readonly em: EntityManager) {}
 
   async lockById(id: string): Promise<Wallet | undefined> {
     // FOR UPDATE: bloqueia só ESTA linha. Wallets diferentes seguem em paralelo.
-    const e = await this.em.findOne(WalletEntity, { id }, { lockMode: LockMode.PESSIMISTIC_WRITE });
+    const e = await this.em.findOne(
+      WalletEntity,
+      { id },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
     return e ? walletToDomain(e) : undefined;
   }
 
@@ -25,6 +37,17 @@ export class MikroWalletRepository implements WalletRepository {
     const e = await this.em.findOneOrFail(WalletEntity, { id: wallet.id }); // vem do identity map (sem query)
     applyWallet(e, wallet);
     await this.em.flush();
+  }
+  async insert(wallet: Wallet): Promise<void> {
+    await this.em.insert(WalletEntity, {
+      id: wallet.id,
+      playerId: wallet.playerId,
+      currency: wallet.currency,
+      balance: wallet.balance.toString(),
+      version: wallet.version,
+      createdAt: wallet.createdAt,
+      updatedAt: wallet.updatedAt,
+    });
   }
 }
 
@@ -40,27 +63,54 @@ export class MikroWagerRepository implements WagerRepository {
 
   async isReversed(transactionId: string): Promise<boolean> {
     const n = await this.em.count(WagerTransactionEntity, {
-      referenceTransactionId: transactionId, kind: { $in: ['REFUND', 'ROLLBACK'] }, status: 'PROCESSED',
+      referenceTransactionId: transactionId,
+      kind: { $in: ["REFUND", "ROLLBACK"] },
+      status: "PROCESSED",
     });
     return n > 0; // o índice parcial wt_single_reversal_uq é a barreira final
   }
 
-  async insert(tx: WagerTransaction, balanceObserved: Money, nextReferenceAttemptAt?: Date): Promise<void> {
+  async insert(
+    tx: WagerTransaction,
+    balanceObserved: Money,
+    nextReferenceAttemptAt?: Date,
+  ): Promise<void> {
     await this.em.insert(WagerTransactionEntity, {
-      id: tx.id, providerId: tx.providerId, externalTransactionId: tx.externalTransactionId,
-      idempotencyKey: tx.idempotencyKey, payloadHash: tx.payloadHash, walletId: tx.walletId,
-      playerId: tx.playerId, roundId: tx.roundId, gameId: tx.gameId, kind: tx.kind,
-      amount: tx.money.toString(), currency: tx.money.currency,
+      id: tx.id,
+      providerId: tx.providerId,
+      externalTransactionId: tx.externalTransactionId,
+      idempotencyKey: tx.idempotencyKey,
+      payloadHash: tx.payloadHash,
+      walletId: tx.walletId,
+      playerId: tx.playerId,
+      roundId: tx.roundId,
+      gameId: tx.gameId,
+      kind: tx.kind,
+      amount: tx.money.toString(),
+      currency: tx.money.currency,
       referenceExternalTransactionId: tx.referenceExternalTransactionId,
-      referenceTransactionId: tx.referenceTransactionId, status: tx.status, failureCode: tx.failureCode,
-      referenceAttempts: 0, nextReferenceAttemptAt, processedAt: tx.processedAt,
-      balanceObserved: balanceObserved.toString(), createdAt: tx.createdAt, updatedAt: tx.createdAt,
+      referenceTransactionId: tx.referenceTransactionId,
+      status: tx.status,
+      failureCode: tx.failureCode,
+      referenceAttempts: 0,
+      nextReferenceAttemptAt,
+      processedAt: tx.processedAt,
+      balanceObserved: balanceObserved.toString(),
+      createdAt: tx.createdAt,
+      updatedAt: tx.createdAt,
     });
   }
 
-  private async find(where: Partial<WagerTransactionEntity>): Promise<StoredWager | undefined> {
+  private async find(
+    where: Partial<WagerTransactionEntity>,
+  ): Promise<StoredWager | undefined> {
     const e = await this.em.findOne(WagerTransactionEntity, where);
-    return e ? { transaction: wagerToDomain(e), balanceObserved: Money.fromPersisted(e.balanceObserved, e.currency) } : undefined;
+    return e
+      ? {
+          transaction: wagerToDomain(e),
+          balanceObserved: Money.fromPersisted(e.balanceObserved, e.currency),
+        }
+      : undefined;
   }
 }
 
@@ -69,25 +119,42 @@ export class MikroLedgerRepository implements LedgerRepository {
 
   async insert(e: WalletLedgerEntry): Promise<void> {
     await this.em.insert(LedgerEntryEntity, {
-      id: e.id, walletId: e.walletId, transactionId: e.transactionId, direction: e.direction,
-      amount: e.money.toString(), currency: e.money.currency,
-      balanceBefore: e.balanceBefore.toString(), balanceAfter: e.balanceAfter.toString(), createdAt: e.createdAt,
+      id: e.id,
+      walletId: e.walletId,
+      transactionId: e.transactionId,
+      direction: e.direction,
+      amount: e.money.toString(),
+      currency: e.money.currency,
+      balanceBefore: e.balanceBefore.toString(),
+      balanceAfter: e.balanceAfter.toString(),
+      createdAt: e.createdAt,
     });
   }
 
   /** Cursor opaco = base64url(seq). Ordem decrescente por seq (estável, sem duplicar nem pular linhas). */
   async list(walletId: string, cursor: string | undefined, limit: number) {
-    const after = cursor ? BigInt(Buffer.from(cursor, 'base64url').toString('utf8')) : null;
+    const after = cursor
+      ? BigInt(Buffer.from(cursor, "base64url").toString("utf8"))
+      : null;
     const rows: any[] = await this.em.getConnection().execute(
       `select seq, id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at
          from wallet_ledger_entries
         where wallet_id = ? and (?::bigint is null or seq < ?::bigint)
         order by seq desc limit ?`,
-      [walletId, after?.toString() ?? null, after?.toString() ?? null, limit + 1],
-      'all', this.em.getTransactionContext(),
+      [
+        walletId,
+        after?.toString() ?? null,
+        after?.toString() ?? null,
+        limit + 1,
+      ],
+      "all",
+      this.em.getTransactionContext(),
     );
     const page = rows.slice(0, limit);
-    const next = rows.length > limit ? Buffer.from(String(page.at(-1).seq)).toString('base64url') : undefined;
+    const next =
+      rows.length > limit
+        ? Buffer.from(String(page.at(-1).seq)).toString("base64url")
+        : undefined;
     return { items: page, nextCursor: next };
   }
 }
@@ -95,7 +162,12 @@ export class MikroLedgerRepository implements LedgerRepository {
 export class MikroInboxRepository implements InboxRepository {
   constructor(private readonly em: EntityManager) {}
 
-  async tryReceive(p: { consumerName: string; messageId: string; payloadHash: string; at: Date }) {
+  async tryReceive(p: {
+    consumerName: string;
+    messageId: string;
+    payloadHash: string;
+    at: Date;
+  }) {
     const ctx = this.em.getTransactionContext();
     const conn = this.em.getConnection();
     // processed_at = now: a linha só fica visível junto com o efeito (mesmo COMMIT).
@@ -104,14 +176,21 @@ export class MikroInboxRepository implements InboxRepository {
        values (?, ?, ?, ?, ?)
        on conflict (consumer_name, message_id) do nothing
        returning message_id`,
-      [p.consumerName, p.messageId, p.payloadHash, p.at, p.at], 'all', ctx,
+      [p.consumerName, p.messageId, p.payloadHash, p.at, p.at],
+      "all",
+      ctx,
     );
     if (inserted.length > 0) return { created: true as const };
     const rows: any[] = await conn.execute(
       `select payload_hash from inbox_messages where consumer_name = ? and message_id = ?`,
-      [p.consumerName, p.messageId], 'all', ctx,
+      [p.consumerName, p.messageId],
+      "all",
+      ctx,
     );
-    return { created: false as const, payloadHash: String(rows[0].payload_hash).trim() };
+    return {
+      created: false as const,
+      payloadHash: String(rows[0].payload_hash).trim(),
+    };
   }
 }
 
@@ -120,17 +199,25 @@ export class MikroOutboxRepository implements OutboxRepository {
 
   async insert(m: OutboxMessage): Promise<void> {
     await this.em.insert(OutboxMessageEntity, {
-      id: m.id, aggregateId: m.aggregateId, eventType: m.eventType, payload: m.payload as Record<string, unknown>,
-      occurredAt: m.occurredAt, attempts: m.attempts, nextAttemptAt: m.nextAttemptAt ?? m.occurredAt,
+      id: m.id,
+      aggregateId: m.aggregateId,
+      eventType: m.eventType,
+      payload: JSON.parse(JSON.stringify(m.payload)) as Record<string, unknown>,
+      occurredAt: m.occurredAt,
+      attempts: m.attempts,
+      nextAttemptAt: m.nextAttemptAt ?? m.occurredAt,
     });
   }
-
   /** Para o publisher: FOR UPDATE SKIP LOCKED. Publishers concorrentes não pegam a mesma linha. */
   async claimDue(limit: number, now: Date): Promise<OutboxMessageEntity[]> {
     return this.em.find(
       OutboxMessageEntity,
       { publishedAt: null, nextAttemptAt: { $lte: now } },
-      { orderBy: { nextAttemptAt: 'asc' }, limit, lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE },
+      {
+        orderBy: { nextAttemptAt: "asc" },
+        limit,
+        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
+      },
     );
   }
 }
