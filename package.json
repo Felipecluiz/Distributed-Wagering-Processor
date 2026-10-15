@@ -1,10 +1,17 @@
 {
   "scripts": {
+    "start": "bun src/main.ts",
     "db:up": "docker compose up -d postgres",
     "migration:up": "bunx --bun mikro-orm migration:up",
     "migration:down": "bunx --bun mikro-orm migration:down",
     "migration:pending": "bunx --bun mikro-orm migration:pending",
-    "migration:list": "bunx --bun mikro-orm migration:list"
+    "migration:list": "bunx --bun mikro-orm migration:list",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "test:unit": "bun test src",
+    "test:integration": "bun test test/integration",
+    "test:concurrency": "bun test test/concurrency",
+    "test:http": "bun test test/http"
   },
   "mikro-orm": {
     "configPaths": [
@@ -14,14 +21,19 @@
   "dependencies": {
     "@mikro-orm/core": "6",
     "@mikro-orm/migrations": "6",
-    "@mikro-orm/postgresql": "6"
+    "@mikro-orm/postgresql": "6",
+    "@nestjs/common": "^11",
+    "@nestjs/core": "^11",
+    "@nestjs/platform-express": "^11",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7"
   },
   "devDependencies": {
     "@mikro-orm/cli": "6",
+    "@types/express": "^5",
     "@types/pg": "^8.23.1",
     "bun-types": "^1.4.3",
     "pg": "^8.23.1",
-    "reflect-metadata": "^0.2.2",
     "typescript": "^7.0.2"
   }
 }
