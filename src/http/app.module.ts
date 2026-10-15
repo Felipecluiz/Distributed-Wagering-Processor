@@ -166,7 +166,7 @@ export class AppModule {
         {
           provide: TOKENS.publisher,
           useFactory: (uow: UnitOfWork, bus: EventBus, clock: Clock, metrics: AppMetrics) =>
-            new PublishOutboxUseCase(uow, bus, clock, { leaseMs: config.sqs.publisher.leaseMs }, (occurredAt, publishedAt) => {
+            new PublishOutboxUseCase(uow, bus, clock, { leaseMs: config.sqs.publisher.leaseMs, batchSize: config.sqs.publisher.batchSize }, (occurredAt, publishedAt) => {
               metrics.outboxPublished.inc({}, occurredAt.length);
               for (const at of occurredAt) {
                 metrics.outboxPublishLagSeconds.observe({}, Math.max(0, publishedAt.getTime() - at.getTime()) / 1000);

@@ -75,10 +75,25 @@ Depois:
 | `bun run test:http`        | a aplicação Nest de verdade: status HTTP, consultas, reconciliação, métricas |
 | `bun run test:messaging`   | consumer SQS (redelivery, crash antes do ack, DLQ, retry) e publisher da outbox |
 | `bun run test:recovery`    | SIGKILL da aplicação no meio da carga e consistência final após o reinício  |
+| `bun run test:load`        | teste de carga contra as 3 réplicas (requer `bun run up`); ver abaixo       |
 | `bun run typecheck`        | `tsc --noEmit`                                                              |
 
 O mapa de cada teste obrigatório do desafio para a suíte que o cobre está no
 [ARCHITECTURE.md, seção 19](./ARCHITECTURE.md#19-testes).
+
+### Teste de carga
+
+Com o compose de pé (`bun run up`):
+
+```bash
+bun run test:load                                  # 30s, 50 em paralelo, 20% hot wallet, 10% reenvios
+DURATION_S=60 CONCURRENCY=100 bun run test:load    # parâmetros por variável de ambiente
+```
+
+Mede throughput, latência p50/p95/p99 por tipo de operação, status, conflitos de lock e lag da
+outbox. No fim confere que o saldo de cada wallet é exatamente o esperado, que a reconciliação
+fecha em todas e que nenhum reenvio gerou efeito novo (sai com código 1 se algo falhar). O
+relatório fica em `load-test-results/`. Metodologia e análise: [LOAD_TEST.md](./LOAD_TEST.md).
 
 ### Migrations
 
@@ -176,6 +191,7 @@ Todas por variável de ambiente, validadas no boot (`src/config.ts`).
 | `SQS_VISIBILITY_TIMEOUT_SECONDS`  | `30`                                                     |
 | `OUTBOX_PUBLISHER`                | `on`                                                     |
 | `OUTBOX_POLL_MS` / `OUTBOX_LEASE_MS` | `500` / `30000`                                       |
+| `OUTBOX_BATCH_SIZE`               | `200` (lote cheio: a próxima rodada começa na hora)      |
 | `PENDING_REFERENCE_WORKER`        | `on`                                                     |
 | `PENDING_REFERENCE_POLL_MS`       | `1000`                                                   |
 | `PENDING_REFERENCE_MAX_ATTEMPTS`  | `8`                                                      |

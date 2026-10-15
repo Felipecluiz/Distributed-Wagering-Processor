@@ -279,6 +279,11 @@ redrive policy da fila de entrada referencia o ARN dela.
   2. **Publica fora da transação.** Nenhuma conexão nem lock fica preso esperando o broker.
   3. **Marca** os publicados e agenda retry dos que falharam (`scheduleRetry`: attempts + 1,
      backoff `min(1s × 2^n, 5min)` + jitter, `last_error`).
+- Lote de 200 eventos (`OUTBOX_BATCH_SIZE`). Se o lote veio cheio, a próxima rodada começa na
+  hora, sem esperar o intervalo: com backlog o publisher drena na velocidade do broker, e sem
+  backlog consulta o banco a cada `OUTBOX_POLL_MS`. O worker de `PENDING_REFERENCE` segue a
+  mesma regra. (Antes era lote de 50 com intervalo fixo, um teto de ~100 eventos/s por réplica
+  que o teste de carga expôs: ver `LOAD_TEST.md`.)
 - `MessageDeduplicationId = eventId`, `MessageGroupId = aggregateId`.
 - **Crash entre publicar e marcar:** o lease expira (`OUTBOX_LEASE_MS`, padrão 30s) e outra
   instância publica de novo. Garantia: **at-least-once**; o consumidor deduplica por `eventId`
@@ -369,10 +374,15 @@ uma aposta, qualquer que seja a porta de entrada.
 ### Ordem dentro da transação
 
 1. **Inbox** (`INSERT ... ON CONFLICT DO NOTHING`), somente quando a origem é SQS.
-2. **Lock da wallet** (`SELECT ... FOR UPDATE`). É o primeiro lock sobre dados financeiros.
-3. Consulta de idempotência (por key e por `externalTransactionId`), já serializada pelo lock.
-4. Decisão das regras de negócio, **sem mutar** a wallet em memória antes de validar.
-5. Escritas: `wager_transactions` → ledger → wallet → outbox.
+2. **Replay sem lock:** busca pela `Idempotency-Key`; se a transação já existe, devolve o
+   resultado gravado sem tocar na wallet. A linha gravada tem os campos de negócio imutáveis
+   (trigger), então ler o que já foi commitado é seguro. Um reenvio não entra na fila do lock
+   (medido no teste de carga: ver `LOAD_TEST.md`).
+3. **Lock da wallet** (`SELECT ... FOR UPDATE`). É o primeiro lock sobre dados financeiros.
+4. Rechecagem de idempotência (por key e por `externalTransactionId`), agora serializada pelo
+   lock: cobre a corrida em que outra requisição com a mesma key commitou entre 2 e 3.
+5. Decisão das regras de negócio, **sem mutar** a wallet em memória antes de validar.
+6. Escritas: `wager_transactions` → ledger → wallet → outbox.
 
 A ordem de escrita respeita as FKs (transação antes do ledger).
 
@@ -535,7 +545,8 @@ Decisões para que os testes sejam determinísticos:
   produção, usar arquivamento/particionamento com uma exceção controlada (ex.: permitir
   DELETE de mensagens publicadas há mais de N dias). O mesmo vale para o inbox.
 - **Hot wallet:** o lock pessimista serializa as operações da mesma wallet, e o throughput
-  por wallet é limitado ao tempo de uma transação.
+  por wallet é limitado ao tempo de uma transação. Medido: cerca de 80 transações/s numa única
+  wallet, com p50 de ~350 ms sob carga (ver `LOAD_TEST.md`, que também discute como subir esse teto).
 - **Triggers por lançamento:** o encadeamento lê o último lançamento a cada insert, e a
   checagem deferida faz o mesmo no COMMIT. É uma consulta por índice
   (`UNIQUE (wallet_id, wallet_version)`), de custo constante por operação.

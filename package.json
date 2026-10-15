@@ -18,7 +18,8 @@
     "test:concurrency": "bun test test/concurrency",
     "test:http": "bun test test/http",
     "test:messaging": "bun test test/messaging",
-    "test:recovery": "bun test test/recovery"
+    "test:recovery": "bun test test/recovery",
+    "test:load": "bun scripts/load-test.ts"
   },
   "mikro-orm": {
     "configPaths": [

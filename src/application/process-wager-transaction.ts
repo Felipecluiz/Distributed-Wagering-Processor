@@ -116,10 +116,20 @@ export class ProcessWagerTransactionUseCase {
       }
     }
 
+    // Caminho rápido do replay, sem lock: a transação gravada é a fonte da verdade e seus campos
+    // de negócio são imutáveis (trigger), então ler o que já foi commitado é seguro. Um reenvio
+    // não entra na fila do lock da wallet só para devolver o resultado (relevante na hot wallet).
+    const known = await c.wagers.findByIdempotencyKey(
+      input.providerId,
+      input.idempotencyKey,
+    );
+    if (known) return this.replay(known, input);
+
     const wallet = await c.wallets.lockById(input.walletId); // lock por wallet, nunca global
     if (!wallet) throw new WalletNotFoundError(input.walletId);
 
-    // Sob o lock da wallet as requisições da mesma wallet estão serializadas: o replay é determinístico.
+    // Rechecagem sob o lock: uma requisição concorrente com a mesma key pode ter commitado entre
+    // a leitura acima e o lock. Daqui em diante a wallet está serializada e o replay é determinístico.
     const byKey = await c.wagers.findByIdempotencyKey(
       input.providerId,
       input.idempotencyKey,

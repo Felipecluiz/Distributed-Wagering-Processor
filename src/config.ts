@@ -23,7 +23,7 @@ export interface AppConfig {
     /** Rede de segurança da redrive policy; a aplicação manda para a DLQ antes. */
     redriveMaxReceiveCount: number;
     consumer: { enabled: boolean; maxAttempts: number };
-    publisher: { enabled: boolean; pollMs: number; leaseMs: number };
+    publisher: { enabled: boolean; pollMs: number; leaseMs: number; batchSize: number };
   };
 }
 
@@ -82,6 +82,7 @@ export function loadConfig(env: Env = process.env): AppConfig {
         enabled: on(env, "OUTBOX_PUBLISHER"),
         pollMs: int(env, "OUTBOX_POLL_MS", 500)!,
         leaseMs: int(env, "OUTBOX_LEASE_MS", 30_000)!,
+        batchSize: int(env, "OUTBOX_BATCH_SIZE", 200)!,
       },
     },
   };

@@ -9,7 +9,10 @@ import {
 import { MikroORM } from "@mikro-orm/core";
 import type { SQSClient } from "@aws-sdk/client-sqs";
 import { PublishOutboxUseCase } from "../application/publish-outbox";
-import { ResolvePendingReferencesUseCase } from "../application/resolve-pending-references";
+import {
+  DEFAULT_PENDING_REFERENCE_OPTIONS,
+  ResolvePendingReferencesUseCase,
+} from "../application/resolve-pending-references";
 import { WagerQueueConsumer } from "../application/wager-queue-consumer";
 import type { AppConfig } from "../config";
 import { ensureQueues } from "../infrastructure/messaging/sqs";
@@ -17,8 +20,9 @@ import type { AppMetrics } from "../infrastructure/observability/app-metrics";
 import { TOKENS } from "./tokens";
 
 /**
- * Executa `task` em loop com intervalo fixo entre rodadas. stop() para de agendar e espera
- * a rodada em andamento terminar.
+ * Executa `task` em loop. Se a rodada encheu o lote (`task` devolve true), roda de novo na hora:
+ * com backlog, o worker drena sem esperar o intervalo. Sem trabalho, espera `intervalMs`.
+ * stop() para de agendar e espera a rodada em andamento terminar.
  */
 class IntervalLoop {
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -26,7 +30,7 @@ class IntervalLoop {
   private stopped = true;
 
   constructor(
-    private readonly task: () => Promise<void>,
+    private readonly task: () => Promise<boolean>,
     private readonly intervalMs: number,
     private readonly logger: Logger,
   ) {}
@@ -50,13 +54,14 @@ class IntervalLoop {
 
   private async tick(): Promise<void> {
     if (this.stopped) return;
+    let moreWork = false;
     try {
-      await this.task();
+      moreWork = await this.task();
     } catch (e) {
       this.logger.error({ msg: "worker round failed", err: e instanceof Error ? e.message : String(e) });
     } finally {
       this.inFlight = undefined;
-      if (!this.stopped) this.schedule(this.intervalMs);
+      if (!this.stopped) this.schedule(moreWork ? 0 : this.intervalMs);
     }
   }
 }
@@ -83,6 +88,7 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
     @Inject(TOKENS.metrics) metrics: AppMetrics,
   ) {
     const pendingLogger = new Logger("PendingReferenceWorker");
+    const pendingBatchSize = config.pendingReference.options.batchSize ?? DEFAULT_PENDING_REFERENCE_OPTIONS.batchSize;
     this.pendingLoop = new IntervalLoop(
       async () => {
         const stats = await pending.runOnce();
@@ -92,6 +98,7 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
         metrics.pendingResolutions.inc({ outcome: "error" }, stats.errors);
         metrics.retries.inc({ component: "pending_reference" }, stats.rescheduled);
         if (stats.claimed > 0) pendingLogger.log({ msg: "pending references round", ...stats });
+        return stats.claimed >= pendingBatchSize;
       },
       config.pendingReference.pollMs,
       pendingLogger,
@@ -104,6 +111,8 @@ export class BackgroundWorkers implements OnApplicationBootstrap, BeforeApplicat
           metrics.retries.inc({ component: "outbox_publisher" }, stats.failed);
           publisherLogger.warn({ msg: "outbox publish failures", ...stats });
         }
+        // Lote cheio e sem falha: há backlog, publica de novo sem esperar.
+        return stats.claimed >= config.sqs.publisher.batchSize && stats.failed === 0;
       },
       config.sqs.publisher.pollMs,
       publisherLogger,
