@@ -1,26 +1,12 @@
 import { Money, MoneyProps } from "../domain/money/money";
 import { Wallet } from "../domain/wallet/wallet";
 import {
-  LedgerDirection,
-  WalletLedgerEntry,
-} from "../domain/ledger/wallet-ledger-entry";
-import {
   INTERNAL_PROVIDER,
   WagerTransaction,
   WagerTransactionKind as K,
   WagerTransactionStatus as S,
 } from "../domain/wager/wager-transaction";
-import { BusinessRuleError, FailureCode } from "../domain/shared/errors";
-import {
-  EventContext,
-  WalletBalanceChanged,
-} from "../domain/events/integration-event";
-import {
-  WagerTransactionPendingReference,
-  WagerTransactionProcessed,
-  WagerTransactionRejected,
-} from "../domain/events/wager-events";
-import { OutboxMessage } from "../domain/messaging/outbox-message";
+import { FailureCode } from "../domain/shared/errors";
 import { sha256Canonical } from "./canonical-json";
 import {
   ConcurrentInsertError,
@@ -35,6 +21,7 @@ import {
   TxContext,
   UnitOfWork,
 } from "./ports";
+import { Decision, WagerDecider } from "./wager-decider";
 
 export interface ProcessWagerCommand {
   idempotencyKey: string;
@@ -66,21 +53,21 @@ interface Parsed extends Omit<ProcessWagerCommand, "kind" | "money"> {
   money: Money;
   payloadHash: string;
 }
-type Decision =
-  | { type: "applied"; entry?: WalletLedgerEntry; referenceId?: string }
-  | { type: "pendingReference" }
-  | { type: "rejected"; code: FailureCode };
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SUBMITTABLE = [K.Bet, K.Win, K.Loss, K.Refund, K.Rollback];
-const PENDING_RETRY_FIRST_MS = 5_000;
+export const PENDING_RETRY_FIRST_MS = 5_000;
 
 export class ProcessWagerTransactionUseCase {
+  private readonly decider: WagerDecider;
+
   constructor(
     private readonly uow: UnitOfWork,
     private readonly clock: Clock,
     private readonly ids: IdGenerator,
-  ) {}
+  ) {
+    this.decider = new WagerDecider(ids);
+  }
 
   async execute(
     cmd: ProcessWagerCommand,
@@ -166,79 +153,8 @@ export class ProcessWagerTransactionUseCase {
     });
 
     // Todas as validações acontecem ANTES de mutar a wallet em memória.
-    const decision = await this.decide(c, wallet, tx, now);
+    const decision = await this.decider.decide(c, wallet, tx, now);
     return this.persist(c, wallet, tx, decision, now, ctx);
-  }
-
-  /** Regras de negócio. Nunca lança BusinessRuleError: devolve a decisão. */
-  private async decide(
-    c: TxContext,
-    wallet: Wallet,
-    tx: WagerTransaction,
-    now: Date,
-  ): Promise<Decision> {
-    if (tx.playerId !== wallet.playerId)
-      return reject(FailureCode.PlayerWalletMismatch);
-    if (tx.money.currency !== wallet.currency)
-      return reject(FailureCode.CurrencyMismatch);
-
-    let reference: WagerTransaction | undefined;
-    if (tx.requiresReference()) {
-      const stored = await c.wagers.findByExternalId(
-        tx.providerId,
-        tx.referenceExternalTransactionId!,
-      );
-      if (!stored) return { type: "pendingReference" };
-      reference = stored.transaction;
-      const verdict = this.checkReference(tx, reference);
-      if (verdict === "pending") return { type: "pendingReference" };
-      if (verdict) return reject(verdict);
-      if (await c.wagers.isReversed(reference.id))
-        return reject(FailureCode.AlreadyReversed);
-    }
-
-    if (!tx.affectsBalance())
-      return { type: "applied", referenceId: reference?.id }; // LOSS
-
-    const movement = {
-      entryId: this.ids.next(),
-      transactionId: tx.id,
-      money: tx.money,
-      at: now,
-      insufficientCode:
-        tx.kind === K.Bet ? undefined : FailureCode.ReversalWouldOverdraw,
-    };
-    try {
-      const entry =
-        tx.ledgerDirectionFor(reference) === LedgerDirection.Debit
-          ? wallet.debit(movement)
-          : wallet.credit(movement);
-      return { type: "applied", entry, referenceId: reference?.id };
-    } catch (e) {
-      if (e instanceof BusinessRuleError) return reject(e.failureCode);
-      throw e;
-    }
-  }
-
-  private checkReference(
-    tx: WagerTransaction,
-    ref: WagerTransaction,
-  ): FailureCode | "pending" | undefined {
-    if (
-      ref.playerId !== tx.playerId ||
-      ref.walletId !== tx.walletId ||
-      ref.roundId !== tx.roundId ||
-      ref.money.currency !== tx.money.currency
-    ) {
-      return FailureCode.ReferenceMismatch;
-    }
-    const allowed = tx.kind === K.Refund ? [K.Bet] : [K.Bet, K.Win, K.Refund];
-    if (!allowed.includes(ref.kind)) return FailureCode.InvalidReferenceKind;
-    if (ref.status === S.Pending || ref.status === S.PendingReference)
-      return "pending"; // a referência também espera
-    if (ref.status !== S.Processed) return FailureCode.ReferenceNotProcessed;
-    if (!ref.money.equals(tx.money)) return FailureCode.AmountMismatch;
-    return undefined;
   }
 
   /** Aplica o estado final no agregado e grava tudo, na ordem exigida pelas FKs. */
@@ -264,30 +180,10 @@ export class ProcessWagerTransactionUseCase {
       await c.ledger.insert(d.entry); // 2. ledger
       await c.wallets.save(wallet); // 3. saldo + version
     }
-
-    const evCtx = (): EventContext => ({
-      eventId: this.ids.next(),
+    await this.decider.enqueueOutcomeEvents(c, tx, wallet, d, {
       correlationId: ctx.correlationId,
-      causationId: tx.id,
-      occurredAt: now,
-    });
-    const enqueue = (e: Parameters<typeof OutboxMessage.enqueue>[0]) =>
-      c.outbox.insert(OutboxMessage.enqueue(e));
-    if (d.type === "applied") {
-      await enqueue(
-        WagerTransactionProcessed.from(tx, balance.toJSON(), evCtx()),
-      );
-      if (d.entry)
-        await enqueue(WalletBalanceChanged.from(wallet, d.entry, evCtx()));
-    } else if (d.type === "rejected") {
-      await enqueue(
-        WagerTransactionRejected.from(tx, balance.toJSON(), evCtx()),
-      );
-    } else {
-      await enqueue(
-        WagerTransactionPendingReference.from(tx, balance.toJSON(), evCtx()),
-      );
-    }
+      now,
+    }); // 4. outbox
 
     return {
       transactionId: tx.id,
@@ -391,5 +287,3 @@ export class ProcessWagerTransactionUseCase {
     };
   }
 }
-
-const reject = (code: FailureCode): Decision => ({ type: "rejected", code });

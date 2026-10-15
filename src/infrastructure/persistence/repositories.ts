@@ -7,7 +7,9 @@ import { OutboxMessage } from "../../domain/messaging/outbox-message";
 import {
   InboxRepository,
   LedgerRepository,
+  LockedPendingWager,
   OutboxRepository,
+  PendingReferenceClaim,
   StoredWager,
   WagerRepository,
   WalletRepository,
@@ -18,7 +20,12 @@ import {
   WagerTransactionEntity,
   WalletEntity,
 } from "./entities";
-import { applyWallet, walletToDomain, wagerToDomain } from "./mappers";
+import {
+  applyWager,
+  applyWallet,
+  walletToDomain,
+  wagerToDomain,
+} from "./mappers";
 
 export class MikroWalletRepository implements WalletRepository {
   constructor(private readonly em: EntityManager) {}
@@ -101,6 +108,68 @@ export class MikroWagerRepository implements WagerRepository {
     });
   }
 
+  // ───── worker de PENDING_REFERENCE ─────
+
+  async claimDuePendingReferences(
+    limit: number,
+    now: Date,
+    leaseUntil: Date,
+  ): Promise<PendingReferenceClaim[]> {
+    // Só toca linhas de wager_transactions e nunca espera lock (SKIP LOCKED):
+    // não entra em ciclo com quem trava a wallet.
+    const rows: any[] = await this.em.getConnection().execute(
+      `update wager_transactions
+          set next_reference_attempt_at = ?, updated_at = ?
+        where id in (
+          select id from wager_transactions
+           where status = 'PENDING_REFERENCE' and next_reference_attempt_at <= ?
+           order by next_reference_attempt_at
+           limit ?
+           for update skip locked)
+        returning id, wallet_id, reference_attempts`,
+      [leaseUntil, now, now, limit],
+      "all",
+      this.em.getTransactionContext(),
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      walletId: r.wallet_id,
+      attempts: Number(r.reference_attempts),
+    }));
+  }
+
+  async lockPendingById(id: string): Promise<LockedPendingWager | undefined> {
+    const e = await this.em.findOne(
+      WagerTransactionEntity,
+      { id },
+      { lockMode: LockMode.PESSIMISTIC_WRITE },
+    );
+    return e
+      ? {
+          transaction: wagerToDomain(e),
+          balanceObserved: Money.fromPersisted(e.balanceObserved, e.currency),
+          attempts: e.referenceAttempts,
+        }
+      : undefined;
+  }
+
+  async saveResolution(
+    tx: WagerTransaction,
+    balanceObserved: Money,
+    attempts: number,
+    nextAttemptAt?: Date,
+  ): Promise<void> {
+    const e = await this.em.findOneOrFail(WagerTransactionEntity, {
+      id: tx.id,
+    }); // identity map: já carregada por lockPendingById
+    applyWager(e, tx);
+    e.balanceObserved = balanceObserved.toString();
+    e.referenceAttempts = attempts;
+    // Em estado terminal o valor antigo fica: o índice de vencidas filtra por status.
+    if (nextAttemptAt) e.nextReferenceAttemptAt = nextAttemptAt;
+    await this.em.flush();
+  }
+
   private async find(
     where: Partial<WagerTransactionEntity>,
   ): Promise<StoredWager | undefined> {
@@ -138,7 +207,8 @@ export class MikroLedgerRepository implements LedgerRepository {
       ? BigInt(Buffer.from(cursor, "base64url").toString("utf8"))
       : null;
     const rows: any[] = await this.em.getConnection().execute(
-      `select seq, id, transaction_id, direction, amount, currency, balance_before, balance_after, created_at
+      `select seq, id, transaction_id, direction, amount, currency,
+              balance_before, balance_after, wallet_version, created_at
          from wallet_ledger_entries
         where wallet_id = ? and (?::bigint is null or seq < ?::bigint)
         order by seq desc limit ?`,

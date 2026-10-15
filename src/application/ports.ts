@@ -9,6 +9,18 @@ export interface StoredWager {
   balanceObserved: Money;
 }
 
+/** Pendente reivindicada pelo worker (com lease). */
+export interface PendingReferenceClaim {
+  id: string;
+  walletId: string;
+  /** reference_attempts no momento da reivindicação: detecta se outro worker já mexeu nela. */
+  attempts: number;
+}
+
+export interface LockedPendingWager extends StoredWager {
+  attempts: number;
+}
+
 export interface WalletRepository {
   /** SELECT ... FOR UPDATE. Deve ser o PRIMEIRO lock da transação. */
   lockById(id: string): Promise<Wallet | undefined>;
@@ -34,6 +46,26 @@ export interface WagerRepository {
     tx: WagerTransaction,
     balanceObserved: Money,
     nextReferenceAttemptAt?: Date,
+  ): Promise<void>;
+
+  // ───── worker de PENDING_REFERENCE ─────
+  /**
+   * Reivindica até `limit` pendentes vencidas, empurrando o próximo horário para `leaseUntil`.
+   * FOR UPDATE SKIP LOCKED: instâncias concorrentes nunca reivindicam a mesma linha.
+   */
+  claimDuePendingReferences(
+    limit: number,
+    now: Date,
+    leaseUntil: Date,
+  ): Promise<PendingReferenceClaim[]>;
+  /** SELECT ... FOR UPDATE da transação. Chamar só depois de travar a wallet. */
+  lockPendingById(id: string): Promise<LockedPendingWager | undefined>;
+  /** Grava o novo estado da pendente (resolvida, rejeitada ou reagendada). */
+  saveResolution(
+    tx: WagerTransaction,
+    balanceObserved: Money,
+    attempts: number,
+    nextAttemptAt?: Date,
   ): Promise<void>;
 }
 
