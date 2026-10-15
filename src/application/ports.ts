@@ -85,6 +85,16 @@ export interface InboxRepository {
 
 export interface OutboxRepository {
   insert(message: OutboxMessage): Promise<void>;
+
+  // ───── publisher ─────
+  /**
+   * Reivindica até `limit` eventos pendentes e vencidos, empurrando o próximo horário para
+   * `leaseUntil`. FOR UPDATE SKIP LOCKED: publishers concorrentes nunca pegam o mesmo evento.
+   */
+  claimDue(limit: number, now: Date, leaseUntil: Date): Promise<OutboxMessage[]>;
+  markPublished(ids: string[], at: Date): Promise<void>;
+  /** Grava attempts/nextAttemptAt (já calculados por scheduleRetry) e o último erro. */
+  saveRetry(message: OutboxMessage, error: string): Promise<void>;
 }
 
 export interface TxContext {

@@ -84,8 +84,16 @@ export class HttpErrorFilter implements ExceptionFilter {
     const res = host.switchToHttp().getResponse<Response>();
     const { status, body, retryAfter } = toHttpError(exception);
     if (status >= 500) {
-      // Sem payload no log: só o erro. Detalhes de negócio nunca vão para a resposta de um 500.
-      this.logger.error(exception instanceof Error ? exception.stack ?? exception.message : String(exception));
+      // Sem payload no log: só o erro. Detalhes internos nunca vão para a resposta de um 500.
+      this.logger.error(
+        {
+          msg: "unhandled error",
+          code: body.code,
+          err: exception instanceof Error ? exception.message : String(exception),
+          correlationId: host.switchToHttp().getRequest<{ headers: Record<string, unknown> }>().headers["x-correlation-id"],
+        },
+        exception instanceof Error ? exception.stack : undefined,
+      );
     }
     if (retryAfter !== undefined) res.setHeader("Retry-After", String(retryAfter));
     res.status(status).json(body);

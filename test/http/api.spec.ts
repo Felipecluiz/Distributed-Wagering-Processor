@@ -6,13 +6,19 @@ import { loadConfig } from '../../src/config';
 import { createApp } from '../../src/http/app';
 
 // A aplicação Nest de verdade, numa porta aleatória, contra o Postgres real.
-// O worker de PENDING_REFERENCE fica desligado para o teste ser determinístico.
+// Workers (PENDING_REFERENCE, consumer SQS e publisher) ficam desligados: o teste é determinístico.
 
 let app: INestApplication;
 let base: string;
 
 beforeAll(async () => {
-  app = await createApp(loadConfig({ ...process.env, PENDING_REFERENCE_WORKER: 'off' }), { logger: false });
+  app = await createApp(loadConfig({
+      ...process.env,
+      PENDING_REFERENCE_WORKER: 'off',
+      SQS_CONSUMER: 'off',
+      OUTBOX_PUBLISHER: 'off',
+      SQS_CREATE_QUEUES: 'off',
+    }), { logger: false });
   await app.listen(0);
   base = `http://127.0.0.1:${(app.getHttpServer().address() as AddressInfo).port}`;
 });
@@ -255,10 +261,34 @@ describe('consultas', () => {
 });
 
 describe('health', () => {
-  test('live e ready', async () => {
+  test('live responde sem tocar dependências', async () => {
     expect((await call('GET', '/health/live')).status).toBe(200);
+  });
+
+  test('ready reporta cada dependência e só é 200 se todas estão de pé', async () => {
     const ready = await call('GET', '/health/ready');
-    expect(ready.status).toBe(200);
     expect(ready.body.checks.postgres).toBe('up');
+    const allUp = Object.values(ready.body.checks).every((s) => s === 'up');
+    expect(ready.status).toBe(allUp ? 200 : 503);
+  });
+});
+
+describe('métricas', () => {
+  test('GET /metrics expõe as métricas do processamento em formato Prometheus', async () => {
+    const w = await newWallet();
+    await wager(w, { key: 'bet', kind: 'BET', amount: '1.00' });
+    await wager(w, { key: 'bet', kind: 'BET', amount: '1.00' }); // replay
+
+    const res = await fetch(`${base}/metrics`);
+    const text = await res.text();
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    expect(text).toMatch(/^wager_transactions_total\{source="http",status="PROCESSED",replay="false"\} \d+$/m);
+    expect(text).toMatch(/^wager_duplicates_detected_total\{source="http"\} \d+$/m);
+    expect(text).toMatch(/^wager_processing_duration_seconds_count\{source="http"\} \d+$/m);
+    expect(text).toMatch(/^http_requests_total\{method="POST",route="\/wagering\/transactions",status="200"\} \d+$/m);
+    expect(text).toMatch(/^outbox_pending_events \d+$/m);
+    expect(text).toMatch(/^outbox_oldest_pending_age_seconds [\d.]+$/m);
   });
 });

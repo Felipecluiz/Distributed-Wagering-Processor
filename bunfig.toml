@@ -1,0 +1,4 @@
+[test]
+preload = ["./test/setup.ts"]
+# Suítes de integração sobem filas e processos de verdade: mais folga que o padrão de 5s.
+timeout = 30000

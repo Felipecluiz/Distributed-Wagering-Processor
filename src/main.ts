@@ -7,12 +7,16 @@ async function main() {
   const config = loadConfig();
   const app = await createApp(config);
   await app.listen(config.port);
-  new Logger("Bootstrap").log(
-    `listening on :${config.port} (pending-reference worker ${config.pendingReference.enabled ? "on" : "off"})`,
-  );
+  new Logger("Bootstrap").log({
+    msg: "listening",
+    port: config.port,
+    pendingReferenceWorker: config.pendingReference.enabled,
+    sqsConsumer: config.sqs.consumer.enabled,
+    outboxPublisher: config.sqs.publisher.enabled,
+  });
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error(JSON.stringify({ time: new Date().toISOString(), level: "fatal", msg: "boot failed", err: String(err) }));
   process.exit(1);
 });

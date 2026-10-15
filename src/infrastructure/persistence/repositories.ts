@@ -279,16 +279,58 @@ export class MikroOutboxRepository implements OutboxRepository {
       nextAttemptAt: m.nextAttemptAt ?? m.occurredAt,
     });
   }
-  /** Para o publisher: FOR UPDATE SKIP LOCKED. Publishers concorrentes não pegam a mesma linha. */
-  async claimDue(limit: number, now: Date): Promise<OutboxMessageEntity[]> {
-    return this.em.find(
-      OutboxMessageEntity,
-      { publishedAt: null, nextAttemptAt: { $lte: now } },
-      {
-        orderBy: { nextAttemptAt: "asc" },
-        limit,
-        lockMode: LockMode.PESSIMISTIC_PARTIAL_WRITE,
-      },
+  /**
+   * Reivindicação com lease: os locks duram só esta transação curta. A publicação acontece
+   * fora dela, então um broker lento não segura conexão nem lock.
+   */
+  async claimDue(limit: number, now: Date, leaseUntil: Date): Promise<OutboxMessage[]> {
+    const rows: any[] = await this.em.getConnection().execute(
+      `update outbox_messages
+          set next_attempt_at = ?
+        where id in (
+          select id from outbox_messages
+           where published_at is null and next_attempt_at <= ?
+           order by next_attempt_at
+           limit ?
+           for update skip locked)
+        returning id, aggregate_id, event_type, payload, occurred_at, attempts, next_attempt_at`,
+      [leaseUntil, now, limit],
+      "all",
+      this.em.getTransactionContext(),
+    );
+    return rows
+      .map((r) =>
+        OutboxMessage.rehydrate({
+          id: r.id,
+          aggregateId: r.aggregate_id,
+          eventType: r.event_type,
+          payload: typeof r.payload === "string" ? JSON.parse(r.payload) : r.payload,
+          occurredAt: new Date(r.occurred_at),
+          attempts: Number(r.attempts),
+          nextAttemptAt: new Date(r.next_attempt_at),
+        }),
+      )
+      .sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+  }
+
+  async markPublished(ids: string[], at: Date): Promise<void> {
+    if (ids.length === 0) return;
+    await this.em.getConnection().execute(
+      `update outbox_messages set published_at = ?
+        where published_at is null and id in (${ids.map(() => "?").join(", ")})`,
+      [at, ...ids],
+      "run",
+      this.em.getTransactionContext(),
+    );
+  }
+
+  async saveRetry(m: OutboxMessage, error: string): Promise<void> {
+    await this.em.getConnection().execute(
+      `update outbox_messages set attempts = ?, next_attempt_at = ?, last_error = ?
+        where id = ? and published_at is null`,
+      [m.attempts, m.nextAttemptAt, error.slice(0, 1_000), m.id],
+      "run",
+      this.em.getTransactionContext(),
     );
   }
 }

@@ -159,3 +159,25 @@ function decodeCursor(cursor: string): string {
   if (!/^\d{1,19}$/.test(seq)) throw new InvalidPayloadError("invalid cursor");
   return seq;
 }
+
+/** Leituras para os gauges do /metrics (lag da outbox e pendentes). */
+export class MikroBacklogReader {
+  constructor(private readonly orm: MikroORM) {}
+
+  async outboxPending(): Promise<{ count: number; oldestAgeSeconds: number }> {
+    const [r] = await this.orm.em.getConnection().execute(
+      `select count(*)::int as count,
+              coalesce(extract(epoch from (now() - min(occurred_at))), 0)::float8 as age
+         from outbox_messages
+        where published_at is null`,
+    );
+    return { count: Number(r.count), oldestAgeSeconds: Math.max(0, Number(r.age)) };
+  }
+
+  async pendingReferences(): Promise<number> {
+    const [r] = await this.orm.em.getConnection().execute(
+      `select count(*)::int as count from wager_transactions where status = 'PENDING_REFERENCE'`,
+    );
+    return Number(r.count);
+  }
+}

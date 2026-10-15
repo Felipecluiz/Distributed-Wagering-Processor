@@ -6,7 +6,59 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: wagering
     ports: ["5432:5432"]
+    volumes:
+      - ./docker/postgres/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 2s
       retries: 20
+
+  localstack:
+    image: localstack/localstack:4.4
+    environment:
+      SERVICES: sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports: ["4566:4566"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health"]
+      interval: 3s
+      retries: 30
+
+  # Aplica as migrations uma vez e termina. As réplicas só sobem depois que ela conclui.
+  migrate:
+    build: .
+    command: ["bunx", "--bun", "mikro-orm", "migration:up"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wagering
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    profiles: ["app"]
+
+  # Três instâncias idênticas contra o mesmo banco e as mesmas filas: a correção não pode
+  # depender de haver uma instância só. Expostas em localhost:3001, 3002 e 3003.
+  app:
+    build: .
+    init: true
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/wagering
+      AWS_ENDPOINT_URL: http://localstack:4566
+      AWS_REGION: us-east-1
+      LOG_LEVEL: log
+    ports: ["3001-3003:3000"]
+    deploy:
+      replicas: 3
+    # SIGTERM: termina mensagens em andamento, devolve as não iniciadas e fecha conexões.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      localstack:
+        condition: service_healthy
+    profiles: ["app"]

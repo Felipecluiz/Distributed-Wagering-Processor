@@ -10,11 +10,11 @@ import {
 } from "@nestjs/common";
 import type { Response } from "express";
 import { InvalidPayloadError } from "../application/errors";
-import { ProcessWagerTransactionUseCase } from "../application/process-wager-transaction";
 import type {
   ProcessWagerCommand,
   ProcessWagerResult,
 } from "../application/process-wager-transaction";
+import type { ProcessWager } from "../application/wager-message-handler";
 import { ResourceNotFoundError } from "../application/queries";
 import type { WagerQueries } from "../application/queries";
 import { WagerTransactionStatus as S } from "../domain/wager/wager-transaction";
@@ -36,7 +36,7 @@ const HTTP_STATUS: Record<S, number> = {
 @Controller()
 export class WageringController {
   constructor(
-    @Inject(TOKENS.processWager) private readonly processWager: ProcessWagerTransactionUseCase,
+    @Inject(TOKENS.processWager) private readonly processWager: ProcessWager,
     @Inject(TOKENS.queries) private readonly queries: WagerQueries,
   ) {}
 

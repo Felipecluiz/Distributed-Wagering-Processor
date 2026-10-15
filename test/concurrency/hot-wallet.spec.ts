@@ -10,10 +10,8 @@ import {
 } from "../../src/application/process-wager-transaction";
 import { MikroOrmUnitOfWork } from "../../src/infrastructure/persistence/mikro-orm-unit-of-work";
 import { systemClock, uuidGenerator } from "../../src/infrastructure/system";
-import {
-  WagerTransactionStatus
-} from "../../src/domain/wager/wager-transaction";
-import { FailureCode } from '../../src/domain/shared/errors';
+import { WagerTransactionStatus } from "../../src/domain/wager/wager-transaction";
+import { FailureCode } from "../../src/domain/shared/errors";
 
 interface Instance {
   orm: MikroORM;
@@ -206,7 +204,7 @@ describe("concorrência real (Postgres), 3 instâncias", () => {
           "20",
           String(startAt),
         ],
-        { stdout: "pipe", stderr: "inherit" },
+        { stdout: "pipe", stderr: "inherit", env: { ...process.env } },
       ),
     );
     const statuses = (

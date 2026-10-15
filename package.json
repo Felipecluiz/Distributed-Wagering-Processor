@@ -1,7 +1,12 @@
 {
   "scripts": {
     "start": "bun src/main.ts",
-    "db:up": "docker compose up -d postgres",
+    "up": "docker compose --profile app up -d --build",
+    "down": "docker compose --profile app down",
+    "logs": "docker compose --profile app logs -f app",
+    "db:up": "docker compose up -d postgres localstack",
+    "db:test:create": "docker compose exec postgres psql -U postgres -c \"CREATE DATABASE wagering_test\" || true",
+    "db:test:migrate": "DATABASE_URL=postgresql://postgres:postgres@localhost:5432/wagering_test bunx --bun mikro-orm migration:up",
     "migration:up": "bunx --bun mikro-orm migration:up",
     "migration:down": "bunx --bun mikro-orm migration:down",
     "migration:pending": "bunx --bun mikro-orm migration:pending",
@@ -11,7 +16,9 @@
     "test:unit": "bun test src",
     "test:integration": "bun test test/integration",
     "test:concurrency": "bun test test/concurrency",
-    "test:http": "bun test test/http"
+    "test:http": "bun test test/http",
+    "test:messaging": "bun test test/messaging",
+    "test:recovery": "bun test test/recovery"
   },
   "mikro-orm": {
     "configPaths": [
@@ -19,6 +26,7 @@
     ]
   },
   "dependencies": {
+    "@aws-sdk/client-sqs": "^3",
     "@mikro-orm/core": "6",
     "@mikro-orm/migrations": "6",
     "@mikro-orm/postgresql": "6",

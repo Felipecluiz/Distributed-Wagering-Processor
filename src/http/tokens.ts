@@ -11,4 +11,10 @@ export const TOKENS = {
   createWallet: "CreateWalletUseCase",
   resolvePending: "ResolvePendingReferencesUseCase",
   reconcile: "ReconcileWalletUseCase",
+  sqsClient: "SQSClient",
+  requestQueue: "WagerRequestQueue",
+  eventBus: "EventBus",
+  consumer: "WagerQueueConsumer",
+  publisher: "PublishOutboxUseCase",
+  metrics: "AppMetrics",
 } as const;

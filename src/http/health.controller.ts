@@ -1,6 +1,7 @@
 import { Controller, Get, Inject, Res } from "@nestjs/common";
 import { MikroORM } from "@mikro-orm/core";
 import type { Response } from "express";
+import type { BrokerHealthCheck } from "../application/messaging";
 import { Public } from "./auth.guard";
 import { TOKENS } from "./tokens";
 
@@ -28,7 +29,10 @@ async function check(probe: () => Promise<unknown>): Promise<CheckStatus> {
 @Public()
 @Controller("health")
 export class HealthController {
-  constructor(@Inject(TOKENS.orm) private readonly orm: MikroORM) {}
+  constructor(
+    @Inject(TOKENS.orm) private readonly orm: MikroORM,
+    @Inject(TOKENS.requestQueue) private readonly broker: BrokerHealthCheck,
+  ) {}
 
   /** Liveness: o processo responde. Não toca dependências, para não reiniciar por causa delas. */
   @Get("live")
@@ -36,14 +40,15 @@ export class HealthController {
     return { status: "ok" };
   }
 
-  /** Readiness: só recebe tráfego se as dependências respondem. */
+  /** Readiness: só recebe tráfego se PostgreSQL e SQS respondem. */
   @Get("ready")
   async ready(@Res({ passthrough: true }) res: Response) {
-    const checks: Record<string, CheckStatus> = {
-      postgres: await check(() => this.orm.em.getConnection().execute("select 1")),
-      // sqs: entra junto com o consumer
-    };
-    const ok = Object.values(checks).every((s) => s === "up");
+    const [postgres, sqs] = await Promise.all([
+      check(() => this.orm.em.getConnection().execute("select 1")),
+      check(() => this.broker.ping()),
+    ]);
+    const checks = { postgres, sqs };
+    const ok = postgres === "up" && sqs === "up";
     res.status(ok ? 200 : 503);
     return { status: ok ? "ok" : "unavailable", checks };
   }
