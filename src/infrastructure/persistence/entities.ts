@@ -112,6 +112,8 @@ export class LedgerEntryEntity {
     columnType: "numeric(20,2)",
   })
   balanceAfter!: string;
+  @Property({ type: "integer", fieldName: "wallet_version" })
+  walletVersion!: number;
   @Property({
     type: "Date",
     fieldName: "created_at",

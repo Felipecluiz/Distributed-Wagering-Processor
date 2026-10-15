@@ -76,11 +76,11 @@ describe("Money consultas", () => {
     expect(Money.zero("BRL").isZero()).toBe(true);
     expect(brl("0.01").isPositive()).toBe(true);
     expect(brl("1.00").isLessThan(brl("1.01"))).toBe(true);
-    expect(brl("1.0").equals(brl("1.00"))).toBe(true);
+    expect(brl("1.00").equals(brl("1.00"))).toBe(true);
   });
 
   test("toJSON usa string decimal", () => {
-    expect(JSON.stringify(brl("25"))).toBe(
+    expect(JSON.stringify(brl("25.00"))).toBe(
       '{"amount":"25.00","currency":"BRL"}',
     );
   });

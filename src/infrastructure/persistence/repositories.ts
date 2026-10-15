@@ -127,6 +127,7 @@ export class MikroLedgerRepository implements LedgerRepository {
       currency: e.money.currency,
       balanceBefore: e.balanceBefore.toString(),
       balanceAfter: e.balanceAfter.toString(),
+      walletVersion: e.walletVersion,
       createdAt: e.createdAt,
     });
   }
