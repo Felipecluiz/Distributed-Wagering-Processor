@@ -12,7 +12,7 @@
  *   REPLAY_FRACTION  0.1    fração de reenvios idênticos (mesma Idempotency-Key)
  *
  * O que mede: throughput, latência p50/p95/p99 por tipo de operação, distribuição de status,
- * conflitos de lock, duplicatas, retries e lag da outbox (pelo /metrics das réplicas).
+ * conflitos de lock, duplicatas, retries e lag da outbox (metrics das réplicas).
  *
  * O que prova no fim: o saldo de cada wallet é exatamente o esperado pelas operações aceitas,
  * a reconciliação (saldo x ledger) fecha em todas, e nenhum reenvio gerou efeito novo.
@@ -23,7 +23,10 @@ import os from "node:os";
 // ───────────────────────── configuração ─────────────────────────
 
 const env = (name: string, fallback: string) => process.env[name] ?? fallback;
-const TARGETS = env("TARGETS", "http://localhost:3001,http://localhost:3002,http://localhost:3003")
+const TARGETS = env(
+  "TARGETS",
+  "http://localhost:3001,http://localhost:3002,http://localhost:3003",
+)
   .split(",")
   .map((t) => t.trim().replace(/\/$/, ""));
 const DURATION_S = Number(env("DURATION_S", "30"));
@@ -47,7 +50,9 @@ const fmt = (cents: bigint) => {
 const parseCents = (amount: string) => {
   const [int, frac = "00"] = amount.split(".");
   const sign = int!.startsWith("-") ? -1n : 1n;
-  return sign * (BigInt(int!.replace("-", "")) * 100n + BigInt(frac.padEnd(2, "0")));
+  return (
+    sign * (BigInt(int!.replace("-", "")) * 100n + BigInt(frac.padEnd(2, "0")))
+  );
 };
 const pick = <T>(xs: T[]) => xs[Math.floor(Math.random() * xs.length)]!;
 let rr = 0;
@@ -55,10 +60,16 @@ const nextTarget = () => TARGETS[rr++ % TARGETS.length]!;
 
 function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
-  return sorted[Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)]!;
+  return sorted[
+    Math.min(sorted.length - 1, Math.ceil((p / 100) * sorted.length) - 1)
+  ]!;
 }
 
-async function post(url: string, body: unknown, headers: Record<string, string> = {}) {
+async function post(
+  url: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+) {
   const res = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
@@ -92,7 +103,11 @@ async function scrapeAll(): Promise<Series> {
   return total;
 }
 
-function delta(before: Series, after: Series, prefix: string): Array<[string, number]> {
+function delta(
+  before: Series,
+  after: Series,
+  prefix: string,
+): Array<[string, number]> {
   return [...after]
     .filter(([k]) => k.startsWith(prefix) && !k.includes("_bucket"))
     .map(([k, v]) => [k, v - (before.get(k) ?? 0)] as [string, number])
@@ -105,11 +120,25 @@ const sumDelta = (before: Series, after: Series, prefix: string) =>
 
 // ───────────────────────── carga ─────────────────────────
 
-type Wallet = { id: string; playerId: string; expectedCents: bigint; uncertain: boolean };
+type Wallet = {
+  id: string;
+  playerId: string;
+  expectedCents: bigint;
+  uncertain: boolean;
+};
 type Category = "normal" | "hot" | "replay";
-type Sent = { key: string; body: Record<string, unknown>; transactionId: string; status: number };
+type Sent = {
+  key: string;
+  body: Record<string, unknown>;
+  transactionId: string;
+  status: number;
+};
 
-const latencies: Record<Category, number[]> = { normal: [], hot: [], replay: [] };
+const latencies: Record<Category, number[]> = {
+  normal: [],
+  hot: [],
+  replay: [],
+};
 const statuses = new Map<string, number>();
 const sent: Sent[] = [];
 let networkErrors = 0;
@@ -121,14 +150,28 @@ async function createWallet(initialCents: bigint): Promise<Wallet> {
     playerId: crypto.randomUUID(),
     initialBalance: { amount: fmt(initialCents), currency: "BRL" },
   });
-  if (r.status !== 201) throw new Error(`wallet creation failed: ${r.status} ${JSON.stringify(r.body)}`);
-  return { id: r.body.id, playerId: r.body.playerId, expectedCents: initialCents, uncertain: false };
+  if (r.status !== 201)
+    throw new Error(
+      `wallet creation failed: ${r.status} ${JSON.stringify(r.body)}`,
+    );
+  return {
+    id: r.body.id,
+    playerId: r.body.playerId,
+    expectedCents: initialCents,
+    uncertain: false,
+  };
 }
 
-async function submit(category: Category, key: string, body: Record<string, unknown>) {
+async function submit(
+  category: Category,
+  key: string,
+  body: Record<string, unknown>,
+) {
   const started = performance.now();
   try {
-    const r = await post(`${nextTarget()}/wagering/transactions`, body, { "idempotency-key": key });
+    const r = await post(`${nextTarget()}/wagering/transactions`, body, {
+      "idempotency-key": key,
+    });
     latencies[category].push(performance.now() - started);
     const label = `${r.status} ${r.body?.status ?? r.body?.code ?? ""}`.trim();
     statuses.set(label, (statuses.get(label) ?? 0) + 1);
@@ -141,7 +184,8 @@ async function submit(category: Category, key: string, body: Record<string, unkn
 
 async function newWager(category: "normal" | "hot", w: Wallet) {
   const kind = category === "hot" || Math.random() < 0.7 ? "BET" : "WIN";
-  const cents = category === "hot" ? 100n : BigInt(100 + Math.floor(Math.random() * 4_900));
+  const cents =
+    category === "hot" ? 100n : BigInt(100 + Math.floor(Math.random() * 4_900));
   const ext = `${RUN}-${++seq}`;
   const body = {
     providerId: "load-test",
@@ -162,7 +206,13 @@ async function newWager(category: "normal" | "hot", w: Wallet) {
   if (r.status === 200 && r.body.status === "PROCESSED") {
     w.expectedCents += kind === "BET" ? -cents : cents;
   }
-  if (sent.length < 5_000) sent.push({ key, body, transactionId: r.body?.transactionId, status: r.status });
+  if (sent.length < 5_000)
+    sent.push({
+      key,
+      body,
+      transactionId: r.body?.transactionId,
+      status: r.status,
+    });
 }
 
 async function replay() {
@@ -171,7 +221,11 @@ async function replay() {
   const r = await submit("replay", original.key, original.body);
   if (!r) return;
   // Reenvio idêntico tem de ser replay da mesma transação, com o mesmo status: nunca efeito novo.
-  if (!r.body?.idempotentReplay || r.body.transactionId !== original.transactionId || r.status !== original.status) {
+  if (
+    !r.body?.idempotentReplay ||
+    r.body.transactionId !== original.transactionId ||
+    r.status !== original.status
+  ) {
     replayViolations++;
   }
 }
@@ -182,18 +236,27 @@ async function main() {
   console.log(`alvos: ${TARGETS.join(", ")}`);
   for (const t of TARGETS) {
     const r = await fetch(`${t}/health/ready`).catch(() => undefined);
-    if (r?.status !== 200) throw new Error(`${t} não está pronto (rode "bun run up")`);
+    if (r?.status !== 200)
+      throw new Error(`${t} não está pronto (rode "bun run up")`);
   }
 
   console.log(`criando ${WALLETS} wallets + 1 hot wallet...`);
   const wallets: Wallet[] = [];
   for (let i = 0; i < WALLETS; i += 20) {
-    wallets.push(...(await Promise.all(Array.from({ length: Math.min(20, WALLETS - i) }, () => createWallet(NORMAL_INITIAL_CENTS)))));
+    wallets.push(
+      ...(await Promise.all(
+        Array.from({ length: Math.min(20, WALLETS - i) }, () =>
+          createWallet(NORMAL_INITIAL_CENTS),
+        ),
+      )),
+    );
   }
   const hot = await createWallet(HOT_INITIAL_CENTS);
 
   const before = await scrapeAll();
-  console.log(`carga: ${DURATION_S}s, ${CONCURRENCY} em paralelo, hot ${HOT_FRACTION * 100}%, replay ${REPLAY_FRACTION * 100}%...`);
+  console.log(
+    `carga: ${DURATION_S}s, ${CONCURRENCY} em paralelo, hot ${HOT_FRACTION * 100}%, replay ${REPLAY_FRACTION * 100}%...`,
+  );
 
   const started = performance.now();
   const deadline = started + DURATION_S * 1_000;
@@ -202,7 +265,8 @@ async function main() {
       while (performance.now() < deadline) {
         const roll = Math.random();
         if (roll < REPLAY_FRACTION) await replay();
-        else if (roll < REPLAY_FRACTION + HOT_FRACTION) await newWager("hot", hot);
+        else if (roll < REPLAY_FRACTION + HOT_FRACTION)
+          await newWager("hot", hot);
         else await newWager("normal", pick(wallets));
       }
     }),
@@ -211,7 +275,8 @@ async function main() {
 
   // Lag da outbox: quanto tempo depois do fim da carga até não sobrar evento pendente.
   const drainStarted = performance.now();
-  let pendingAtEnd = (await scrape(TARGETS[0]!)).get("outbox_pending_events") ?? 0;
+  let pendingAtEnd =
+    (await scrape(TARGETS[0]!)).get("outbox_pending_events") ?? 0;
   let pending = pendingAtEnd;
   while (pending > 0 && performance.now() - drainStarted < 120_000) {
     await Bun.sleep(250);
@@ -225,9 +290,16 @@ async function main() {
   let balanceMismatches = 0;
   let reconciliationFailures = 0;
   for (const w of [...wallets, hot]) {
-    const rec = await post(`${nextTarget()}/wallets/${w.id}/reconciliation`, undefined);
+    const rec = await post(
+      `${nextTarget()}/wallets/${w.id}/reconciliation`,
+      undefined,
+    );
     if (!rec.body?.consistent) reconciliationFailures++;
-    if (!w.uncertain && parseCents(rec.body.storedBalance.amount) !== w.expectedCents) balanceMismatches++;
+    if (
+      !w.uncertain &&
+      parseCents(rec.body.storedBalance.amount) !== w.expectedCents
+    )
+      balanceMismatches++;
   }
 
   // ───── relatório ─────
@@ -237,7 +309,9 @@ async function main() {
     const s = [...xs].sort((a, b) => a - b);
     return `| ${name} | ${s.length} | ${percentile(s, 50).toFixed(1)} | ${percentile(s, 95).toFixed(1)} | ${percentile(s, 99).toFixed(1)} | ${(s.at(-1) ?? 0).toFixed(1)} |`;
   };
-  const non2xx = [...statuses].filter(([k]) => !k.startsWith("200")).reduce((a, [, v]) => a + v, 0);
+  const non2xx = [...statuses]
+    .filter(([k]) => !k.startsWith("200"))
+    .reduce((a, [, v]) => a + v, 0);
   const lagCount = sumDelta(before, after, "outbox_publish_lag_seconds_count");
   const lagSum = sumDelta(before, after, "outbox_publish_lag_seconds_sum");
 
@@ -273,7 +347,10 @@ ${row("todas", all)}
 
 | Resposta | Quantidade |
 | -------- | ---------- |
-${[...statuses].sort().map(([k, v]) => `| ${k} | ${v} |`).join("\n")}
+${[...statuses]
+  .sort()
+  .map(([k, v]) => `| ${k} | ${v} |`)
+  .join("\n")}
 | erro de rede | ${networkErrors} |
 
 - Taxa de erro (respostas não-200 + erros de rede): **${(((non2xx + networkErrors) / Math.max(1, total + networkErrors)) * 100).toFixed(2)}%**
@@ -305,7 +382,8 @@ ${[...statuses].sort().map(([k, v]) => `| ${k} | ${v} |`).join("\n")}
   await Bun.write(file, report);
   console.log(`relatório salvo em ${file}`);
 
-  if (balanceMismatches + reconciliationFailures + replayViolations > 0) process.exit(1);
+  if (balanceMismatches + reconciliationFailures + replayViolations > 0)
+    process.exit(1);
 }
 
 main().catch((e) => {

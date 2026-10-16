@@ -10,8 +10,8 @@
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
     "resolveJsonModule": true,
-    "types": ["bun-types"],
+    "types": ["bun-types", "node"],
     "outDir": "dist"
   },
-  "include": ["src", "migrations", "test", "mikro-orm.config.ts"]
+  "include": ["src", "migrations", "test", "scripts", "mikro-orm.config.ts"]
 }
